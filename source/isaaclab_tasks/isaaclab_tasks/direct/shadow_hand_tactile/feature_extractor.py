@@ -35,6 +35,20 @@ class FeatureExtractorNetwork(nn.Module):
             nn.AvgPool2d(6),
         )
 
+        self.mlp = nn.Sequential(
+            nn.Linear(in_channel, 64),
+            nn.GELU(),
+            nn.Linear(64, 64),
+            nn.GELU(),
+            nn.Linear(64, 128),
+            nn.GELU(),
+            nn.Linear(128, 128),
+            nn.GELU(),
+            nn.Linear(128, 256),
+            nn.GELU(),
+            nn.Linear(256, mlp_out_dim),
+        )
+
         self.linear = nn.Sequential(
             nn.Linear(128, 27),
         )
@@ -148,35 +162,25 @@ class FeatureExtractor:
         save_images_to_file(segmentation_img, "shadow_hand_segmentation.png")
 
     def step(
-        self, rgb_img: torch.Tensor, depth_img: torch.Tensor, segmentation_img: torch.Tensor, gt_pose: torch.Tensor
+        self, gt_feature: torch.Tensor, input_obs: torch.Tensor
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """Extracts the features using the images and trains the model if the train flag is set to True.
 
         Args:
-            rgb_img (torch.Tensor): RGB image tensor. Shape: (N, H, W, 3).
-            depth_img (torch.Tensor): Depth image tensor. Shape: (N, H, W, 1).
-            segmentation_img (torch.Tensor): Segmentation image tensor. Shape: (N, H, W, 3).
-            gt_pose (torch.Tensor): Ground truth pose tensor (position and corners). Shape: (N, 27).
+            gt_feature (torch.Tensor): Ground truth feature tensor. Shape: (N, 27).
+            input_obs (torch.Tensor): Input observation tensor.
 
         Returns:
-            tuple[torch.Tensor, torch.Tensor]: Pose loss and predicted pose.
+            tuple[torch.Tensor, torch.Tensor]: Feature loss and predicted feature.
         """
-
-        rgb_img, depth_img, segmentation_img = self._preprocess_images(rgb_img, depth_img, segmentation_img)
-
-        if self.cfg.write_image_to_file:
-            self._save_images(rgb_img, depth_img, segmentation_img)
-
         if self.cfg.train:
             with torch.enable_grad():
                 with torch.inference_mode(False):
-                    img_input = torch.cat((rgb_img, depth_img, segmentation_img), dim=-1)
                     self.optimizer.zero_grad()
 
-                    predicted_pose = self.feature_extractor(img_input)
-                    pose_loss = self.l2_loss(predicted_pose, gt_pose.clone()) * 100
-
-                    pose_loss.backward()
+                    predicted_feature = self.feature_extractor(input_obs)
+                    feature_loss = self.l2_loss(predicted_feature, gt_feature.clone()) * 100
+                    feature_loss.backward()
                     self.optimizer.step()
 
                     if self.step_count % 50000 == 0:
@@ -187,8 +191,7 @@ class FeatureExtractor:
 
                     self.step_count += 1
 
-                    return pose_loss, predicted_pose
+                    return feature_loss, predicted_feature
         else:
-            img_input = torch.cat((rgb_img, depth_img, segmentation_img), dim=-1)
-            predicted_pose = self.feature_extractor(img_input)
-            return None, predicted_pose
+            predicted_feature = self.feature_extractor(input_obs)
+            return None, predicted_feature

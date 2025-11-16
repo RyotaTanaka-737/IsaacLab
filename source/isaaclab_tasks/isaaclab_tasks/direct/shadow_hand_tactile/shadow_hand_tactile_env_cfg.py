@@ -140,7 +140,7 @@ class ShadowHandEnvCfg(DirectRLEnvCfg):
     # robot
     robot_cfg: ArticulationCfg = SHADOW_HAND_CFG.replace(prim_path="/World/envs/env_.*/Robot").replace(
         init_state=ArticulationCfg.InitialStateCfg(
-            pos=(0.0, 0.0, 0.5),
+            pos=(0.0, 0.0, 1.0),
             rot=(0.0, 1.0, 0.0, 0.0),
             joint_pos={".*": 0.0},
         )
@@ -210,8 +210,11 @@ class ShadowHandEnvCfg(DirectRLEnvCfg):
     # in-hand object
     object_cfg: RigidObjectCfg = RigidObjectCfg(
         prim_path="/World/envs/env_.*/object",
-        spawn=sim_utils.UsdFileCfg(
-            usd_path=f"{ISAAC_NUCLEUS_DIR}/Props/Blocks/DexCube/dex_cube_instanceable.usd",
+        spawn=sim_utils.MultiUsdFileCfg(
+            usd_path=[f"{ISAAC_NUCLEUS_DIR}/Props/Blocks/DexCube/dex_cube_instanceable.usd",
+                      f"{ISAAC_NUCLEUS_DIR}/Props/Blocks/DexCube/dex_cube_instanceable.usd",
+            ],
+            random_choice=False,
             rigid_props=sim_utils.RigidBodyPropertiesCfg(
                 kinematic_enabled=False,
                 disable_gravity=False,
@@ -224,21 +227,24 @@ class ShadowHandEnvCfg(DirectRLEnvCfg):
             ),
             mass_props=sim_utils.MassPropertiesCfg(density=567.0),
         ),
-        init_state=RigidObjectCfg.InitialStateCfg(pos=(0.0, -0.39, 0.6), rot=(1.0, 0.0, 0.0, 0.0)),
+        init_state=RigidObjectCfg.InitialStateCfg(pos=(0.0, -0.39, 0.9), rot=(1.0, 0.0, 0.0, 0.0)),
     )
-    # goal object
-    goal_object_cfg: VisualizationMarkersCfg = VisualizationMarkersCfg(
-        prim_path="/Visuals/goal_marker",
-        markers={
-            "goal": sim_utils.UsdFileCfg(
-                usd_path=f"{ISAAC_NUCLEUS_DIR}/Props/Blocks/DexCube/dex_cube_instanceable.usd",
-                scale=(1.0, 1.0, 1.0),
-            )
-        },
+
+    object_stage_cfg: RigidObjectCfg = RigidObjectCfg(
+        prim_path="/World/envs/env_.*/stageobject",
+        spawn=sim_utils.CuboidCfg(
+            size=(1.0, 1.0, 0.5),
+            rigid_props=sim_utils.RigidBodyPropertiesCfg(),
+            mass_props=sim_utils.MassPropertiesCfg(mass=1.0),
+            collision_props=sim_utils.CollisionPropertiesCfg(),
+            visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(0.8, 0.0, 0.8)),
+        ),
+        init_state=RigidObjectCfg.InitialStateCfg(pos=(0.0, 0.0, 0.5), rot=(1.0, 0.0, 0.0, 0.0)),
     )
+
     # scene
     scene: InteractiveSceneCfg = InteractiveSceneCfg(
-        num_envs=8192, env_spacing=0.75, replicate_physics=True, clone_in_fabric=True
+        num_envs=8192, env_spacing=0.75, replicate_physics=False, clone_in_fabric=True
     )
 
     # reset
@@ -251,8 +257,10 @@ class ShadowHandEnvCfg(DirectRLEnvCfg):
     rot_eps = 0.1
     action_penalty_scale = -0.0002
     reach_goal_bonus = 250
-    fall_penalty = 0
+    rew_scale_alive = 1.0
+    fall_penalty = -50.0
     fall_dist = 0.24
+    fall_height = 0.4
     vel_obs_scale = 0.2
     success_tolerance = 0.1
     max_consecutive_success = 0
