@@ -446,6 +446,8 @@ class ShadowHandTactileEnv(InHandManipulationEnv):
         self.successes[env_ids] = 0
         self._compute_intermediate_values()
 
+        self.buffer.reset(env_ids)
+
     def _reset_target_pose(self, env_ids):
         # reset goal rotation
         rand_floats = sample_uniform(-1.0, 1.0, (len(env_ids), 2), device=self.device)

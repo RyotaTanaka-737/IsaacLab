@@ -101,6 +101,35 @@ class EventCfg:
         },
     )
 
+    reset_gravity = EventTerm(
+        func=mdp.randomize_physics_scene_gravity,
+        mode="interval",
+        is_global_time=True,
+        interval_range_s=(36.0, 36.0),  # time_s = num_steps * (decimation * dt)
+        params={
+            "gravity_distribution_params": ([0.0, 0.0, 0.0], [0.0, 0.0, 0.4]),
+            "operation": "add",
+            "distribution": "gaussian",
+        },
+    )
+
+    push_robot = EventTerm(
+        func=mdp.push_by_setting_velocity,
+        mode="interval",
+        interval_range_s=(1.0, 2.0),
+        params={"velocity_range": {"x": (-0.5, 0.5), "y": (-0.5, 0.5), "z": (0.5, 1), "yaw": (10, 10), "pitch": (10, 10), "roll": (-10, 10)}},
+    )
+
+    down_stage_object = EventTerm(
+        func=mdp.preset_root_state_uniform,
+        mode="interval",
+        interval_range_s=(0.1, 0.5),
+        params={
+            "pose_range":{"z": (-1.0, 0.0)},
+            "asset_cfg": SceneEntityCfg("object_stage"),
+        },
+    )
+
     # -- scene
     reset_gravity = EventTerm(
         func=mdp.randomize_physics_scene_gravity,

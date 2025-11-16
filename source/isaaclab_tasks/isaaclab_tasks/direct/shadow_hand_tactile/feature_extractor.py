@@ -58,11 +58,12 @@ class FeatureExtractorNetwork(nn.Module):
         ])
 
     def forward(self, x):
-        x = x.permute(0, 3, 1, 2)
-        x[:, 0:3, :, :] = self.data_transforms(x[:, 0:3, :, :])
-        x[:, 4:7, :, :] = self.data_transforms(x[:, 4:7, :, :])
-        cnn_x = self.cnn(x)
-        out = self.linear(cnn_x.view(-1, 128))
+        # x = x.permute(0, 3, 1, 2)
+        # x[:, 0:3, :, :] = self.data_transforms(x[:, 0:3, :, :])
+        # x[:, 4:7, :, :] = self.data_transforms(x[:, 4:7, :, :])
+        # cnn_x = self.cnn(x)
+        # out = self.linear(cnn_x.view(-1, 128))
+        out = self.mlp(x)
         return out
 
 
