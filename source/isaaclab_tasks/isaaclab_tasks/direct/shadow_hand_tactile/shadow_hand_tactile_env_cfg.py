@@ -290,6 +290,8 @@ class ShadowHandEnvCfg(DirectRLEnvCfg):
     fall_penalty = -50.0
     fall_dist = 0.24
     fall_height = 0.4
+    obj_move = 0.1
+    rew_obj_move = 0.1
     vel_obs_scale = 0.2
     success_tolerance = 0.1
     max_consecutive_success = 0

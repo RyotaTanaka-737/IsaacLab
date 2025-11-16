@@ -20,6 +20,7 @@ models:
     network:
       - name: net
         input: OBSERVATIONS
+        input_dim_list: [48, 65, 19, 25, 128]
         layers: [512, 512, 256, 128]
         activations: elu
     output: ACTIONS
@@ -29,6 +30,7 @@ models:
     network:
       - name: net
         input: OBSERVATIONS
+        input_dim_list: [48, 65, 19, 25, 128]
         layers: [512, 512, 256, 128]
         activations: elu
     output: ONE

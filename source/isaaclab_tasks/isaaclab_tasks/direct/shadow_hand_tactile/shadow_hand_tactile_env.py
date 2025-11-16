@@ -255,23 +255,23 @@ class ShadowHandTactileEnv(InHandManipulationEnv):
         obs = torch.cat(
             (
                 # hand
-                unscale(self.hand_dof_pos, self.hand_dof_lower_limits, self.hand_dof_upper_limits),
-                self.cfg.vel_obs_scale * self.hand_dof_vel,
+                unscale(self.hand_dof_pos, self.hand_dof_lower_limits, self.hand_dof_upper_limits), # 24
+                self.cfg.vel_obs_scale * self.hand_dof_vel, # 24
                 # goal
-                self.in_hand_pos,
-                self.goal_rot,
+                self.in_hand_pos, # 3
+                self.goal_rot, # 4
                 # fingertips
-                self.fingertip_pos.view(self.num_envs, self.num_fingertips * 3),
-                self.fingertip_rot.view(self.num_envs, self.num_fingertips * 4),
-                self.fingertip_velocities.view(self.num_envs, self.num_fingertips * 6),
+                self.fingertip_pos.view(self.num_envs, self.num_fingertips * 3), # 15
+                self.fingertip_rot.view(self.num_envs, self.num_fingertips * 4), # 20
+                self.fingertip_velocities.view(self.num_envs, self.num_fingertips * 6), # 30
                 # object
-                self.object_pos,
-                self.object_rot,
-                self.object_velocities,
-                self.object_linvel,
-                self.object_angvel,
+                self.object_pos, # 3
+                self.object_rot, # 4
+                self.object_velocities, # 6
+                self.object_linvel, # 3
+                self.object_angvel, # 3
                 # actions
-                self.actions,
+                self.actions, # 24
             ),
             dim=-1,
         )
@@ -352,10 +352,7 @@ class ShadowHandTactileEnv(InHandManipulationEnv):
 
     def _get_rewards(self) -> torch.Tensor:
         (
-            total_reward,
-            self.reset_goal_buf,
-            self.successes[:],
-            self.consecutive_successes[:],
+            total_reward
         ) = compute_rewards(
             self.reset_buf,
             self.reset_goal_buf,
@@ -383,9 +380,9 @@ class ShadowHandTactileEnv(InHandManipulationEnv):
         self.extras["log"]["consecutive_successes"] = self.consecutive_successes.mean()
 
         # reset goals if the goal has been reached
-        goal_env_ids = self.reset_goal_buf.nonzero(as_tuple=False).squeeze(-1)
-        if len(goal_env_ids) > 0:
-            self._reset_target_pose(goal_env_ids)
+        # goal_env_ids = self.reset_goal_buf.nonzero(as_tuple=False).squeeze(-1)
+        # if len(goal_env_ids) > 0:
+        #     self._reset_target_pose(goal_env_ids)
 
         return total_reward
 
@@ -527,10 +524,20 @@ def compute_rewards(
                                         self.cfg.fall_penalty,
                                         device=self.device,
                                         dtype=torch.float32)
+    
+    # 全ステップのobjectの変化（動いていればよし）
+    obj_move  = torch.sum(torch.abs(self.object_velocities - self.buffer[:, :]), dim=1)
+    obj_move_buf = obj_move > self.config.obj_move
+    reward_move = torch.where(obj_move_buf,
+                              torch.full_like(obj_move_buf,
+                                    self.cfg.rew_obj_move,
+                                    device=self.device,
+                                    dtype=torch.float32))
+
 
     reward = torch.where(self.fell_off_buf, 
                             penalty_dropped, 
-                            reward_alive)
+                            reward_alive) + reward_move
 
     # Check env termination conditions, including maximum success number
     resets = torch.where(self.fell_off_buf, torch.ones_like(reset_buf), reset_buf)
