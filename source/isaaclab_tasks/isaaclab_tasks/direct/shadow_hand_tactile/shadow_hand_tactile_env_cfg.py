@@ -20,6 +20,9 @@ from isaaclab.utils import configclass
 from isaaclab.utils.assets import ISAAC_NUCLEUS_DIR
 from isaaclab.utils.noise import GaussianNoiseCfg, NoiseModelWithAdditiveBiasCfg
 from isaaclab.sensors import ContactSensorCfg
+from isaaclab.markers.config import FRAME_MARKER_CFG
+from .feature_extractor import FeatureExtractor, FeatureExtractorCfg
+import glob
 
 
 @configclass
@@ -112,21 +115,31 @@ class EventCfg:
             "distribution": "gaussian",
         },
     )
-
+    ''' 
     push_robot = EventTerm(
         func=mdp.push_by_setting_velocity,
         mode="interval",
-        interval_range_s=(1.0, 2.0),
-        params={"velocity_range": {"x": (-0.5, 0.5), "y": (-0.5, 0.5), "z": (0.5, 1), "yaw": (10, 10), "pitch": (10, 10), "roll": (-10, 10)}},
+        interval_range_s=(5.0, 10.0),
+        params={"velocity_range": {"x": (-0.5, 0.5), "y": (-0.5, 0.5), "z": (0.5, 1), "yaw": (10, 10), "pitch": (10, 10), "roll": (-10, 10)},
+                "asset_cfg": SceneEntityCfg("robot")},
     )
-
+    '''
     down_stage_object = EventTerm(
-        func=mdp.preset_root_state_uniform,
+        func=mdp.reset_root_state_uniform,
         mode="interval",
         interval_range_s=(0.1, 0.5),
         params={
             "pose_range":{"z": (-1.0, 0.0)},
             "asset_cfg": SceneEntityCfg("object_stage"),
+        },
+    )
+    
+    reset_object_z_events =  EventTerm(
+        func=mdp.spawn_object_under_palm_down,  # 自作関数を指定
+        mode="reset",                  # "reset": エピソードリセット時に実行
+        params={
+            "asset_cfg": SceneEntityCfg("object"),
+            "asset_stage_cfg": SceneEntityCfg("stageobject"),
         },
     )
 
@@ -144,9 +157,9 @@ class EventCfg:
     )
 
 @configclass
-class ShadowHandEnvCfg(DirectRLEnvCfg):
+class ShadowHandTactileEnvCfg(DirectRLEnvCfg):
     # env
-    decimation = 2
+    decimation = 4
     episode_length_s = 10.0
     action_space = 20
     observation_space = 157  # (full)
@@ -156,14 +169,19 @@ class ShadowHandEnvCfg(DirectRLEnvCfg):
 
     # simulation
     sim: SimulationCfg = SimulationCfg(
-        dt=1 / 120,
+        dt=1 / 200,
         render_interval=decimation,
         physics_material=RigidBodyMaterialCfg(
             static_friction=1.0,
             dynamic_friction=1.0,
         ),
         physx=PhysxCfg(
+            solver_type=1,
+            max_position_iteration_count=12,
+            max_velocity_iteration_count=1,
             bounce_threshold_velocity=0.2,
+            gpu_found_lost_pairs_capacity=8 * 1024 * 1024,
+            gpu_temp_buffer_capacity=16 * 1024 * 1024,
         ),
     )
     # robot
@@ -174,6 +192,7 @@ class ShadowHandEnvCfg(DirectRLEnvCfg):
             joint_pos={".*": 0.0},
         )
     )
+    robot_cfg.spawn.activate_contact_sensors = True
     actuated_joint_names = [
         "robot0_WRJ1",
         "robot0_WRJ0",
@@ -203,7 +222,60 @@ class ShadowHandEnvCfg(DirectRLEnvCfg):
         "robot0_lfdistal",
         "robot0_thdistal",
     ]
+    marker_cfg = FRAME_MARKER_CFG.copy()
+    marker_cfg.markers["frame"].scale = (0.05, 0.05, 0.05)
+    marker_cfg.prim_path = "/Visuals/ContactCfg"
     """
+    distal_contact_cfg = ContactSensorCfg(
+        prim_path="/World/envs/env_.*/Robot/robot0_.*distal",
+        update_period=0.0,
+        history_length=1,
+
+    )
+    middle_contact_cfg = ContactSensorCfg(
+        prim_path="/World/envs/env_.*/Robot/robot0_.*middle",
+        update_period=0.0,
+        history_length=1,
+    )
+    proximal_contact_cfg = ContactSensorCfg(
+        prim_path="/World/envs/env_.*/Robot/robot0_.*proximal",
+        update_period=0.0,
+        history_length=1,
+
+    )
+    palm_contact_cfg = ContactSensorCfg(
+        prim_path="/World/envs/env_.*/Robot/robot0_palm",
+        update_period=0.0,
+        history_length=1,
+    )
+    metacarpal_contact_cfg = ContactSensorCfg(
+        prim_path="/World/envs/env_.*/Robot/robot0_lfmetacarpal",
+        update_period=0.0,
+        history_length=1,
+    )
+    """
+    # scene
+    scene: InteractiveSceneCfg = InteractiveSceneCfg(num_envs=512, env_spacing=2.0, replicate_physics=False)
+    """
+    # camera
+    tiled_camera: TiledCameraCfg = TiledCameraCfg(
+        prim_path="/World/envs/env_.*/Camera",
+        offset=TiledCameraCfg.OffsetCfg(pos=(0, -0.35, 1.0), rot=(0.7071, 0.0, 0.7071, 0.0), convention="world"),
+        data_types=["rgb", "depth", "semantic_segmentation"],
+        spawn=sim_utils.PinholeCameraCfg(
+            focal_length=24.0, focus_distance=400.0, horizontal_aperture=20.955, clipping_range=(0.1, 20.0)
+        ),
+        width=120,
+        height=120,
+    )
+    """
+    feature_extractor = FeatureExtractorCfg(train=True, load_checkpoint=False)
+
+    # env
+    observation_space_ = 152 + 17 + 128  # state observation + tactile + PointCloud embedding
+    state_space = 152 + 17 + 128  # asymettric states + vision CNN embedding
+    num_observations: int = observation_space_
+
     marker_cfg = FRAME_MARKER_CFG.copy()
     marker_cfg.markers["frame"].scale = (0.05, 0.05, 0.05)
     marker_cfg.prim_path = "/Visuals/ContactCfg"
@@ -234,15 +306,13 @@ class ShadowHandEnvCfg(DirectRLEnvCfg):
         update_period=0.0,
         history_length=1,
     )
-    """
 
+    usd_list = sorted(glob.glob('/home/ubuntu/IsaacLab/asset/mix/train/*.usd', recursive=True))
     # in-hand object
     object_cfg: RigidObjectCfg = RigidObjectCfg(
         prim_path="/World/envs/env_.*/object",
         spawn=sim_utils.MultiUsdFileCfg(
-            usd_path=[f"{ISAAC_NUCLEUS_DIR}/Props/Blocks/DexCube/dex_cube_instanceable.usd",
-                      f"{ISAAC_NUCLEUS_DIR}/Props/Blocks/DexCube/dex_cube_instanceable.usd",
-            ],
+            usd_path=usd_list,
             random_choice=False,
             rigid_props=sim_utils.RigidBodyPropertiesCfg(
                 kinematic_enabled=False,
@@ -259,22 +329,34 @@ class ShadowHandEnvCfg(DirectRLEnvCfg):
         init_state=RigidObjectCfg.InitialStateCfg(pos=(0.0, -0.39, 0.9), rot=(1.0, 0.0, 0.0, 0.0)),
     )
 
+    # goal object
+    goal_object_cfg: VisualizationMarkersCfg = VisualizationMarkersCfg(
+        prim_path="/Visuals/goal_marker",
+        markers={
+            "goal": sim_utils.MultiUsdFileCfg(
+                usd_path=usd_list,
+                random_choice=False,
+                scale=(1.0, 1.0, 1.0),
+            )
+        },
+    )
+
     object_stage_cfg: RigidObjectCfg = RigidObjectCfg(
         prim_path="/World/envs/env_.*/stageobject",
         spawn=sim_utils.CuboidCfg(
-            size=(1.0, 1.0, 0.5),
+            size=(1.0, 1.0, 0.1),
             rigid_props=sim_utils.RigidBodyPropertiesCfg(),
             mass_props=sim_utils.MassPropertiesCfg(mass=1.0),
             collision_props=sim_utils.CollisionPropertiesCfg(),
             visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(0.8, 0.0, 0.8)),
         ),
-        init_state=RigidObjectCfg.InitialStateCfg(pos=(0.0, 0.0, 0.5), rot=(1.0, 0.0, 0.0, 0.0)),
+        init_state=RigidObjectCfg.InitialStateCfg(pos=(0.0, 0.0, 0.45), rot=(1.0, 0.0, 0.0, 0.0)),
     )
 
     # scene
-    scene: InteractiveSceneCfg = InteractiveSceneCfg(
-        num_envs=8192, env_spacing=0.75, replicate_physics=False, clone_in_fabric=True
-    )
+    # scene: InteractiveSceneCfg = InteractiveSceneCfg(
+    #     num_envs=8192, env_spacing=0.75, replicate_physics=False, clone_in_fabric=True
+    # )
 
     # reset
     reset_position_noise = 0.01  # range of position at reset
@@ -290,6 +372,7 @@ class ShadowHandEnvCfg(DirectRLEnvCfg):
     fall_penalty = -50.0
     fall_dist = 0.24
     fall_height = 0.4
+    thr_obj_move = 0.1
     obj_move = 0.1
     rew_obj_move = 0.1
     vel_obs_scale = 0.2
@@ -298,3 +381,19 @@ class ShadowHandEnvCfg(DirectRLEnvCfg):
     av_factor = 0.1
     act_moving_average = 1.0
     force_torque_obs_scale = 10.0
+
+    def __post_init__(self):
+        super().__post_init__()
+
+        # ここで物理バッファを強制的に増やします (32MB)
+        # エラーで要求されているのは0.2MB程度ですが、足りないとまた止まるので大きく取ります
+        self.sim.physx.gpu_patch_buffer_capacity = 32 * 1024 * 1024
+        self.sim.physx.gpu_found_lost_pairs_capacity = 32 * 1024 * 1024
+
+        # 念のため他も増やしておくと安心です
+        self.sim.physx.gpu_heap_capacity = 64 * 1024 * 1024
+
+        self.sim.physx.gpu_max_rigid_patch_count = 163840 * 10  # 例: 約160万
+
+        # もし Contact Count (接触点数) のエラーも出るようなら以下も増やします
+        self.sim.physx.gpu_max_rigid_contact_count = 524288 * 10 # 例: 約500万

@@ -19,6 +19,8 @@ class FeatureExtractorNetwork(nn.Module):
     def __init__(self):
         super().__init__()
         num_channel = 7
+        in_channel = 325
+        mlp_out_dim = 128
         self.cnn = nn.Sequential(
             nn.Conv2d(num_channel, 16, kernel_size=6, stride=2, padding=0),
             nn.ReLU(),
@@ -36,15 +38,15 @@ class FeatureExtractorNetwork(nn.Module):
         )
 
         self.mlp = nn.Sequential(
-            nn.Linear(in_channel, 64),
+            nn.Linear(in_channel, 512),
             nn.GELU(),
-            nn.Linear(64, 64),
+            nn.Linear(512, 512),
             nn.GELU(),
-            nn.Linear(64, 128),
+            nn.Linear(512, 512),
             nn.GELU(),
-            nn.Linear(128, 128),
+            nn.Linear(512, 256),
             nn.GELU(),
-            nn.Linear(128, 256),
+            nn.Linear(256, 256),
             nn.GELU(),
             nn.Linear(256, mlp_out_dim),
         )
@@ -63,6 +65,7 @@ class FeatureExtractorNetwork(nn.Module):
         # x[:, 4:7, :, :] = self.data_transforms(x[:, 4:7, :, :])
         # cnn_x = self.cnn(x)
         # out = self.linear(cnn_x.view(-1, 128))
+        # print(x)
         out = self.mlp(x)
         return out
 
@@ -102,7 +105,7 @@ class FeatureExtractor:
 
         # Feature extractor model
         self.feature_extractor = FeatureExtractorNetwork()
-        self.feature_extractor.to(self.device)
+        self.feature_extractor.to("cuda:0")
 
         self.step_count = 0
         if log_dir is not None:
@@ -120,9 +123,15 @@ class FeatureExtractor:
             self.feature_extractor.load_state_dict(torch.load(checkpoint, weights_only=True))
 
         if self.cfg.train:
+            # print('train')
+            self.feature_extractor.train()
+            for param in self.feature_extractor.parameters():
+                param.requires_grad = True
             self.optimizer = torch.optim.Adam(self.feature_extractor.parameters(), lr=1e-4)
             self.l2_loss = nn.MSELoss()
-            self.feature_extractor.train()
+            # self.feature_extractor.train()
+            # for param in self.feature_extractor.parameters():
+            #     param.requires_grad = True
         else:
             self.feature_extractor.eval()
 
@@ -174,25 +183,37 @@ class FeatureExtractor:
         Returns:
             tuple[torch.Tensor, torch.Tensor]: Feature loss and predicted feature.
         """
+        self.feature_extractor.train()
+        for param in self.feature_extractor.parameters():
+            param.requires_grad = True
+            # print(param)
+        self.optimizer = torch.optim.Adam(self.feature_extractor.parameters(), lr=1e-4)
+        current_obs = input_obs.clone().float().to("cuda:0")
+        if current_obs.numel() == 0:
+            print('NUUUUUUUUUUUUUUUUUUUL')
         if self.cfg.train:
             with torch.enable_grad():
-                with torch.inference_mode(False):
-                    self.optimizer.zero_grad()
+                # with torch.inference_mode(False):
+                self.optimizer.zero_grad()
 
-                    predicted_feature = self.feature_extractor(input_obs)
-                    feature_loss = self.l2_loss(predicted_feature, gt_feature.clone()) * 100
+                predicted_feature = self.feature_extractor(current_obs)
+                # print('grad_fn', predicted_feature.grad_fn)
+                feature_loss = self.l2_loss(predicted_feature, gt_feature.clone().float()) * 100
+                if feature_loss.requires_grad and feature_loss.grad_fn is not None:
                     feature_loss.backward()
                     self.optimizer.step()
+                else:
+                    print("Warning: Skipping backward pass (No grad_fn found this step).")
 
-                    if self.step_count % 50000 == 0:
-                        torch.save(
-                            self.feature_extractor.state_dict(),
-                            os.path.join(self.log_dir, f"cnn_{self.step_count}_{pose_loss.detach().cpu().numpy()}.pth"),
-                        )
+                if self.step_count % 50000 == 0:
+                    torch.save(
+                        self.feature_extractor.state_dict(),
+                        os.path.join(self.log_dir, f"cnn_{self.step_count}_{feature_loss.detach().cpu().numpy()}.pth"),
+                    )
 
-                    self.step_count += 1
+                self.step_count += 1
 
-                    return feature_loss, predicted_feature
+                return feature_loss, predicted_feature
         else:
             predicted_feature = self.feature_extractor(input_obs)
             return None, predicted_feature

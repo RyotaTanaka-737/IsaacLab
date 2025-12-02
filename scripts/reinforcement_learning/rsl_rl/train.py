@@ -191,12 +191,20 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     env = RslRlVecEnvWrapper(env, clip_actions=agent_cfg.clip_actions)
 
     # create runner from rsl-rl
+    print('agent_device', agent_cfg.device)
+    agent_cfg.device = env.unwrapped.device
     if agent_cfg.class_name == "OnPolicyRunner":
         runner = OnPolicyRunner(env, agent_cfg.to_dict(), log_dir=log_dir, device=agent_cfg.device)
     elif agent_cfg.class_name == "DistillationRunner":
         runner = DistillationRunner(env, agent_cfg.to_dict(), log_dir=log_dir, device=agent_cfg.device)
     else:
         raise ValueError(f"Unsupported runner class: {agent_cfg.class_name}")
+    print(f"Force moving model to device: {agent_cfg.device}")
+    # Actor-Criticモデル全体を明示的にデバイス転送
+    runner.alg.policy.to(agent_cfg.device)
+    # もし正規化層などがあればそれも転送
+    if hasattr(runner.alg, "empirical_normalization"):
+        runner.alg.empirical_normalization.to(agent_cfg.device)
     # write git state to logs
     runner.add_git_repo_to_log(__file__)
     # load the checkpoint

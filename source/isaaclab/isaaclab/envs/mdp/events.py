@@ -1049,12 +1049,87 @@ def push_by_setting_velocity(
     asset.write_root_velocity_to_sim(vel_w, env_ids=env_ids)
 
 
+def get_prim_z_height(prim_path: str) -> float:
+    """
+    指定されたPrimパスのオブジェクトのZ軸方向の高さ(World Bounds)を返します。
+    """
+    stage = omni.usd.get_context().get_stage()
+    prim = stage.GetPrimAtPath(prim_path)
+
+    if not prim.IsValid():
+        print(f"Warning: Prim not found at {prim_path}")
+        return 0.1 # デフォルト値を返す（エラー回避）
+
+    # BBoxCacheの作成 (Default time, World space)
+    bbox_cache = UsdGeom.BBoxCache(Usd.TimeCode.Default(), [UsdGeom.Tokens.default_])
+
+    # ワールド空間でのバウンディングボックスを計算
+    bound = bbox_cache.ComputeWorldBound(prim)
+    range3d = bound.GetRange()
+    size = range3d.GetSize()
+
+    # size[2] が Z軸 (高さ)
+    return size[2]
+
+def spawn_object_under_palm_down(
+        env: ManagerBasedEnv, 
+        env_ids: torch.Tensor, 
+        asset_cfg: SceneEntityCfg,
+        asset_stage_cfg: SceneEntityCfg
+):
+    # 1. アセットへのアクセス
+    object_asset: RigidObject = env.scene[asset_cfg.name]
+    stage_object_asset: RigidObject = env.scene[asset_stage_cfg.name]
+    
+    # 2. 初期位置データのクローン
+    default_root_state = object_asset.default_root_state[env_ids].clone()
+    default_root_state_stage = stage_object_asset.default_root_state[env_ids].clone()
+    
+    # 手のひらの高さ (例: 15cm)
+    palm_z = 0.5
+    safety_margin = 0.005 # 5mmの隙間
+    
+    # --- 3. 環境ごとに高さを計算して位置を決定 ---
+    # 注意: ループ処理はPythonサイドでは遅いですが、リセット時のみであれば許容範囲です。
+    # 高速化したい場合は、事前にUSDごとの高さをテンソル化しておく必要があります。
+    
+    for i, env_id in enumerate(env_ids):
+        # この環境におけるオブジェクトのPrimパスを取得
+        # RigidObjectは通常 "/World/envs/env_{id}/Object" のようなパスを持ちます
+        # ※ ここは実際のUSD構成に合わせてパスを構築してください
+        prim_path = f"/World/envs/env_{int(env_id)}/object"
+        
+        # 高さを取得 (動的計測)
+        obj_height = get_prim_z_height(prim_path)
+        
+        # 半分の高さ（中心から底面まで）
+        half_height = obj_height / 2.0
+        
+        # 目標位置: 手の高さ - マージン - オブジェクトの半径
+        target_z = palm_z - safety_margin - half_height
+        target_z_stage = target_z - safety_margin - 0.05
+        
+        # 床へのめり込み防止
+        # if target_z < half_height:
+        #     target_z = half_height + 0.001
+            
+        # 計算したZを適用
+        default_root_state[i, 2] = target_z
+        default_root_state_stage[i, 2] = target_z_stage
+
+    # 4. シミュレーションに書き込み
+    object_asset.write_root_pose_to_sim(default_root_state[:, :7], env_ids=env_ids)
+    object_asset.write_root_velocity_to_sim(default_root_state[:, 7:], env_ids=env_ids)
+    stage_object_asset.write_root_pose_to_sim(default_root_state_stage[:, :7], env_ids=env_ids)
+    stage_object_asset.write_root_velocity_to_sim(default_root_state_stage[:, 7:], env_ids=env_ids)
+
+
 def reset_root_state_uniform(
     env: ManagerBasedEnv,
     env_ids: torch.Tensor,
     pose_range: dict[str, tuple[float, float]],
     velocity_range: dict[str, tuple[float, float]],
-    asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
+    asset_cfg: SceneEntityCfg
 ):
     """Reset the asset root state to a random position and velocity uniformly within the given ranges.
 

@@ -17,6 +17,7 @@ from isaaclab.envs import DirectRLEnv
 from isaaclab.markers import VisualizationMarkers
 from isaaclab.sim.spawners.from_files import GroundPlaneCfg, spawn_ground_plane
 from isaaclab.utils.math import quat_conjugate, quat_from_angle_axis, quat_mul, sample_uniform, saturate
+from isaaclab.utils.math import wrap_to_pi
 
 if TYPE_CHECKING:
     from isaaclab_tasks.direct.allegro_hand.allegro_hand_env_cfg import AllegroHandEnvCfg
@@ -109,6 +110,7 @@ class InHandManipulationEnv(DirectRLEnv):
             self.hand_dof_lower_limits[:, self.actuated_dof_indices],
             self.hand_dof_upper_limits[:, self.actuated_dof_indices],
         )
+        print('apply',self.cur_targets[:, self.actuated_dof_indices])
 
         self.prev_targets[:, self.actuated_dof_indices] = self.cur_targets[:, self.actuated_dof_indices]
 
@@ -268,7 +270,7 @@ class InHandManipulationEnv(DirectRLEnv):
         )
         self.fingertip_velocities = self.hand.data.body_vel_w[:, self.finger_bodies]
 
-        self.hand_dof_pos = self.hand.data.joint_pos
+        self.hand_dof_pos = wrap_to_pi(self.hand.data.joint_pos)
         self.hand_dof_vel = self.hand.data.joint_vel
 
         # data for object

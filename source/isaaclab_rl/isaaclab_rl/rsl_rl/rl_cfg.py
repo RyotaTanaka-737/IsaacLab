@@ -37,6 +37,9 @@ class RslRlPpoActorCriticCfg:
     critic_obs_normalization: bool = MISSING
     """Whether to normalize the observation for the critic network."""
 
+    input_dims_list: list[int] = MISSING
+    """input dimensions list of the network."""
+
     actor_hidden_dims: list[int] = MISSING
     """The hidden dimensions of the actor network."""
 

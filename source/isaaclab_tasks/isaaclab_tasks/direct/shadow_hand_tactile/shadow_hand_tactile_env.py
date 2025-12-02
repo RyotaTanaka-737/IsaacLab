@@ -22,71 +22,22 @@ from isaaclab.scene import InteractiveSceneCfg
 from isaaclab.sensors import TiledCamera, TiledCameraCfg
 from isaaclab.utils import configclass
 from isaaclab.utils.math import quat_apply
-from isaaclab.utils.buffer import CircularBuffer
+from isaaclab.utils.buffers import CircularBuffer
 
 from isaaclab_tasks.direct.inhand_manipulation.inhand_manipulation_env import InHandManipulationEnv, unscale
 
 from .feature_extractor import FeatureExtractor, FeatureExtractorCfg
-from .shadow_hand_tactile_env_cfg import ShadowHandEnvCfg
+from .shadow_hand_tactile_env_cfg import ShadowHandTactileEnvCfg
 from isaaclab.sim.spawners.from_files import GroundPlaneCfg, spawn_ground_plane
+import glob
+from isaaclab.markers.config import FRAME_MARKER_CFG
+from isaaclab.utils.math import quat_conjugate, quat_from_angle_axis, quat_mul, sample_uniform, saturate
+from isaaclab.sensors import ContactSensorCfg, ContactSensor
+import numpy as np
 
-usd_list = []
+usd_list = sorted(glob.glob('/home/ubuntu/IsaacLab/asset/mix/train/*.usd', recursive=True))
 
 
-
-@configclass
-class ShadowHandTactileEnvCfg(ShadowHandEnvCfg):
-    # scene
-    scene: InteractiveSceneCfg = InteractiveSceneCfg(num_envs=1225, env_spacing=2.0, replicate_physics=False)
-    """
-    # camera
-    tiled_camera: TiledCameraCfg = TiledCameraCfg(
-        prim_path="/World/envs/env_.*/Camera",
-        offset=TiledCameraCfg.OffsetCfg(pos=(0, -0.35, 1.0), rot=(0.7071, 0.0, 0.7071, 0.0), convention="world"),
-        data_types=["rgb", "depth", "semantic_segmentation"],
-        spawn=sim_utils.PinholeCameraCfg(
-            focal_length=24.0, focus_distance=400.0, horizontal_aperture=20.955, clipping_range=(0.1, 20.0)
-        ),
-        width=120,
-        height=120,
-    )
-    """
-    feature_extractor = FeatureExtractorCfg()
-
-    # env
-    observation_space = 164 + 68 + 128  # state observation + vision CNN embedding
-    state_space = 187 + 27  # asymettric states + vision CNN embedding
-
-    marker_cfg = FRAME_MARKER_CFG.copy()
-    marker_cfg.markers["frame"].scale = (0.05, 0.05, 0.05)
-    marker_cfg.prim_path = "/Visuals/ContactCfg"
-    distal_contact_cfg = ContactSensorCfg(
-        prim_path="/World/envs/env_.*/Robot/robot0_.*distal",
-        update_period=0.0,
-        history_length=1,
-
-    )
-    middle_contact_cfg = ContactSensorCfg(
-        prim_path="/World/envs/env_.*/Robot/robot0_.*middle",
-        update_period=0.0,
-        history_length=1,
-    )
-    proximal_contact_cfg = ContactSensorCfg(
-        prim_path="/World/envs/env_.*/Robot/robot0_.*proximal",
-        update_period=0.0,
-        history_length=1,
-
-    )
-    palm_contact_cfg = ContactSensorCfg(
-        prim_path="/World/envs/env_.*/Robot/robot0_palm",
-        update_period=0.0,
-        history_length=1,
-    )
-    metacarpal_contact_cfg = ContactSensorCfg(
-        prim_path="/World/envs/env_.*/Robot/robot0_lfmetacarpal",
-        update_period=0.0,
-        history_length=1,
-    )
 
 
 @configclass
@@ -94,7 +45,7 @@ class ShadowHandTactileEnvPlayCfg(ShadowHandTactileEnvCfg):
     # scene
     scene: InteractiveSceneCfg = InteractiveSceneCfg(num_envs=64, env_spacing=2.0, replicate_physics=False)
     # inference for CNN
-    feature_extractor = FeatureExtractorCfg(train=False, load_checkpoint=True)
+    # feature_extractor = FeatureExtractorCfg(train=False, load_checkpoint=True)
 
 
 class ShadowHandTactileEnv(InHandManipulationEnv):
@@ -104,6 +55,7 @@ class ShadowHandTactileEnv(InHandManipulationEnv):
         super().__init__(cfg, render_mode, **kwargs)
         # Use the log directory from the configuration
         self.feature_extractor = FeatureExtractor(self.cfg.feature_extractor, self.device, self.cfg.log_dir)
+
         # hide goal cubes
         self.goal_pos[:, :] = torch.tensor([-0.2, 0.1, 0.6], device=self.device)
         # keypoints buffer
@@ -111,33 +63,24 @@ class ShadowHandTactileEnv(InHandManipulationEnv):
         self.goal_keypoints = torch.ones(self.num_envs, 8, 3, dtype=torch.float32, device=self.device)
 
         self.num_tactile_observations = 68
+        self.dtype = torch.float16
+        self.binary_tactile = True
+        self.binary_threshold = 0.01
+
 
         self.tactile = torch.zeros((self.num_envs, self.num_tactile_observations), device=self.device)
         self.last_tactile = torch.zeros((self.num_envs, self.num_tactile_observations), device=self.device)
 
-        self.extras["log"] = {
-            "tactile_penalty": None,
-            "success_reward": None,
-            "action_penalty": None,
-            "fall_penalty": None,
-            "object_height": None,
-            "object_z_linvel": None,
-            "object_z_angvel": None,
-            "sum_forces": None,
-            "total_rotations": None,
-            "cumulative_rotations": None,
-            "ball_1_vel": None,
-            "ball_2_vel": None,
-            "ball_dist": None,
-            "dist_penalty": None,
-            "tactile_reward": None,
-            "transition_reward": None,
-            "bounce_reward": None,
-            "air_reward": None
-        }
         self.buffer_length = 5
-        self.buffer = CircularBuffer(size=self.buffer_length, shape=(self.num_envs, self.num_tactile_observations), device=self.device)
-        self.fall_buf = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
+        # self.buffer = CircularBuffer(max_len=self.buffer_length, batch_size=(24+24+self.num_tactile_observations), device=self.device)
+        self.buffer = CircularBuffer(max_len=self.buffer_length, batch_size=self.num_envs, device=self.device)
+        self.fell_off_buf = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
+
+        self.npy_list = []
+        for _i_ in range(self.num_envs):
+            npy_path = (usd_list[(_i_% len(usd_list))].replace('asset', 'features')).replace('.usd', '.npy')
+            self.npy_list.append(np.load(npy_path))
+
 
     def _setup_scene(self):
         # add hand, in-hand object, and goal object
@@ -147,14 +90,6 @@ class ShadowHandTactileEnv(InHandManipulationEnv):
         # self._tiled_camera = TiledCamera(self.cfg.tiled_camera)
         # get stage
         spawn_ground_plane(prim_path="/World/ground", cfg=GroundPlaneCfg())
-        stage = get_current_stage()
-        # add semantics for in-hand cube
-        prim = stage.GetPrimAtPath("/World/envs/env_0/object")
-        sem = Semantics.SemanticsAPI.Apply(prim, "Semantics")
-        sem.CreateSemanticTypeAttr()
-        sem.CreateSemanticDataAttr()
-        sem.GetSemanticTypeAttr().Set("class")
-        sem.GetSemanticDataAttr().Set("cube")
         # clone and replicate (no need to filter for this environment)
         self.scene.clone_environments(copy_from_source=False)
         # add articulation to scene - we must register to scene to randomize with EventManager
@@ -209,22 +144,24 @@ class ShadowHandTactileEnv(InHandManipulationEnv):
         # log pose loss from CNN training
         if "log" not in self.extras:
             self.extras["log"] = dict()
-        self.extras["log"]["pose_loss"] = pose_loss
+        self.extras["log"]["pose_loss"] = pose_loss.mean()
 
         return obs
 
-    def _get_object_feature(self):
+    def _get_object_feature(self, input_obs):
         # feature
         features_list = []
         for _i_ in range(self.num_envs):
-            npy_path = usd_list[(_i_% len(proto_prim_paths))].replace('.usd', '.npy')
-            feature = torch.from_numpy(np.load(npy_path)).to(self.device)
+            # npy_path = (usd_list[(_i_% len(usd_list))].replace('asset', 'features')).replace('.usd', '.npy')
+            # feature = torch.from_numpy(np.load(npy_path)).to(self.device)
+            feature = torch.from_numpy(self.npy_list[(_i_% len(usd_list))]).to(self.device)
             features_list.append(feature)
         features = torch.stack(features_list, dim=0)
-        self.embeddings = features.clone().detach()
+        self.embeddings = features
 
-        obs_gt = self.embeddings
+        obs_gt = torch.reshape(self.embeddings, (self.num_envs, 128))
 
+        """
         # train feature extractor
         state_obs = self._compute_proprio_observations()
         # get_tactile
@@ -235,31 +172,42 @@ class ShadowHandTactileEnv(InHandManipulationEnv):
             concat_list.append(self.buffer.__getitem__(self.buffer_length - _i_ - 1))
         # obs_prev = self.buffer.__getitem__(0)
         obs_concat = torch.cat((concat_list), dim=-1)
+        """
 
         feature_loss = self.feature_extractor.step(
             obs_gt,
-            obs_concat,
+            input_obs,
         )
 
 
         # log pose loss from CNN training
         if "log" not in self.extras:
             self.extras["log"] = dict()
-        self.extras["log"]["feature_loss"] = feature_loss
+        self.extras["log"]["feature_loss"] = feature_loss[0].mean()
 
         return obs_gt
 
     def _compute_proprio_observations(self):
         """Proprioception observations from physics."""
-        print(self.hand_dof_pos)
+        # print(self.hand_dof_pos.shape, (self.cfg.vel_obs_scale * self.hand_dof_vel).shape, self.in_hand_pos.shape, self.goal_rot.shape, self.fingertip_pos.view(self.num_envs, self.num_fingertips * 3).shape, self.fingertip_rot.view(self.num_envs, self.num_fingertips * 4).shape, self.fingertip_velocities.view(self.num_envs, self.num_fingertips * 6).shape, self.object_pos.shape, self.object_rot.shape,self.object_velocities.shape, self.object_linvel.shape, self.object_angvel.shape, self.actions.shape)
+        print('hand_vel', self.cfg.vel_obs_scale * self.hand_dof_vel)
+        print('fin_pos', self.fingertip_pos.view(self.num_envs, self.num_fingertips * 3))
+        print('fin_rot', self.fingertip_rot.view(self.num_envs, self.num_fingertips * 4))
+        print('fin_vel', self.fingertip_velocities.view(self.num_envs, self.num_fingertips * 6))
+        print('obj_pos', self.object_pos)
+        print('obj_rot', self.object_rot)
+        print('obj_vel', self.object_velocities)
+        print('obj_linvel', self.object_linvel)
+        print('obj_angvel', self.object_angvel)
         obs = torch.cat(
             (
                 # hand
-                unscale(self.hand_dof_pos, self.hand_dof_lower_limits, self.hand_dof_upper_limits), # 24
+                # unscale(self.hand_dof_pos, self.hand_dof_lower_limits, self.hand_dof_upper_limits), # 24
+                self.hand_dof_pos,
                 self.cfg.vel_obs_scale * self.hand_dof_vel, # 24
                 # goal
-                self.in_hand_pos, # 3
-                self.goal_rot, # 4
+                # self.in_hand_pos, # 3
+                # self.goal_rot, # 4
                 # fingertips
                 self.fingertip_pos.view(self.num_envs, self.num_fingertips * 3), # 15
                 self.fingertip_rot.view(self.num_envs, self.num_fingertips * 4), # 20
@@ -289,23 +237,39 @@ class ShadowHandTactileEnv(InHandManipulationEnv):
         # get_tactile
         tactile_obs = self._get_tactile()
         obs_now = torch.cat((state_obs, tactile_obs), dim=-1)
+        self.buffer.append(obs_now)
+
+        just_reset_indices = (self.buffer._num_pushes == 1).nonzero(as_tuple=True)[0]
+        if len(just_reset_indices) > 0:
+            # その環境だけ、バッファの全履歴を「今のデータ」で上書きする
+            # shape: [N_reset, obs_dim] -> [N_reset, MaxLen, obs_dim]
+            fill_val = obs_now[just_reset_indices].unsqueeze(1).expand(-1, self.buffer_length, -1)
+
+            self.buffer.buffer[just_reset_indices] = fill_val.clone()
+
+            # 内部カウンタも満タン扱いにしておく（推奨）
+            self.buffer._num_pushes[just_reset_indices] = self.buffer_length
+
         # previous observations
-        concat_list = [obs_now.clone().detach()]
+        concat_list = []
         for _i_ in range(self.buffer_length):
-            concat_list.append(self.buffer.__getitem__(self.buffer_length - _i_ - 1))
+            concat_list.append(self.buffer.buffer[:, (self.buffer_length - _i_ - 1), :48])
+            concat_list.append(self.buffer.buffer[:, (self.buffer_length - _i_ - 1), -17:])
         # obs_prev = self.buffer.__getitem__(0)
-        obs_concat = torch.cat((concat_list), dim=-1)
+        obs_concat = torch.reshape(torch.cat(concat_list, dim=-1), (self.num_envs, -1)).to(device=self.device)
         # vision observations from CMM
         # image_obs = self._compute_image_observations()
         # obs = torch.cat((state_obs, image_obs), dim=-1)
-        feature_obs = self._get_object_feature()
-        obs_all = torch.cat((obs_concat, feature_obs), dim=-1)
+        # feature_obs = self._get_object_feature()
+        feature_obs = self._get_object_feature(obs_concat)
+        # print(feature_obs.shape, obs_concat.shape)
+        obs_all = torch.cat((obs_now, torch.reshape(feature_obs, (self.num_envs, 128))), dim=-1)
         # asymmetric critic states
         self.fingertip_force_sensors = self.hand.root_physx_view.get_link_incoming_joint_force()[:, self.finger_bodies]
         # state = self._compute_states()
-        self.buffer.append(obs_now)
+        # self.buffer.append(obs_now)
 
-        observations = {"policy": obs_all, "critic": obs_all}
+        observations = {"policy": obs_all.to(device=self.device), "critic": obs_all.to(device=self.device)}
         return observations
 
     def _get_tactile(self):
@@ -348,11 +312,14 @@ class ShadowHandTactileEnv(InHandManipulationEnv):
 
         self.last_tactile = self.tactile
         self.tactile = tactile
+        # print(tactile.shape)
         return tactile
 
     def _get_rewards(self) -> torch.Tensor:
         (
-            total_reward
+            total_reward,self.reset_goal_buf,
+            self.successes[:],
+            self.consecutive_successes[:],
         ) = compute_rewards(
             self.reset_buf,
             self.reset_goal_buf,
@@ -373,6 +340,12 @@ class ShadowHandTactileEnv(InHandManipulationEnv):
             self.cfg.fall_dist,
             self.cfg.fall_penalty,
             self.cfg.av_factor,
+            self.fell_off_buf,
+            self.cfg.rew_scale_alive,
+            self.object_velocities,
+            self.buffer.buffer[:, :, :],
+            self.cfg.thr_obj_move,
+            self.cfg.rew_obj_move
         )
 
         if "log" not in self.extras:
@@ -400,6 +373,7 @@ class ShadowHandTactileEnv(InHandManipulationEnv):
         if env_ids is None:
             env_ids = self.hand._ALL_INDICES
         # resets articulation and rigid body attributes
+        # env_ids = env_ids.to(device=self.device, dtype=torch.long).view(-1)
         super()._reset_idx(env_ids)
 
         # reset goals
@@ -455,10 +429,15 @@ class ShadowHandTactileEnv(InHandManipulationEnv):
         # update goal pose and markers
         self.goal_rot[env_ids] = new_rot
         goal_pos = self.goal_pos + self.scene.env_origins
-        self.goal_markers.visualize(goal_pos, self.goal_rot)
+        self.goal_markers.visualize(self.goal_rot[:,:3])
 
         self.reset_goal_buf[env_ids] = 0
 
+@torch.jit.script
+def randomize_rotation(rand0, rand1, x_unit_tensor, y_unit_tensor):
+    return quat_mul(
+        quat_from_angle_axis(rand0 * np.pi, x_unit_tensor), quat_from_angle_axis(rand1 * np.pi, y_unit_tensor)
+    )
 
 @torch.jit.script
 def compute_keypoints(
@@ -491,6 +470,12 @@ def compute_keypoints(
     return out
 
 @torch.jit.script
+def rotation_distance(object_rot, target_rot):
+    # Orientation alignment for the cube in hand and goal cube
+    quat_diff = quat_mul(object_rot, quat_conjugate(target_rot))
+    return 2.0 * torch.asin(torch.clamp(torch.norm(quat_diff[:, 1:4], p=2, dim=-1), max=1.0))  # changed quat convention
+
+@torch.jit.script
 def compute_rewards(
     reset_buf: torch.Tensor,
     reset_goal_buf: torch.Tensor,
@@ -511,36 +496,58 @@ def compute_rewards(
     fall_dist: float,
     fall_penalty: float,
     av_factor: float,
+    fell_off_buf: torch.Tensor,
+    rew_scale_alive: float,
+    object_velocities: torch.Tensor,
+    buffer: torch.Tensor,
+    thr_obj_move: float,
+    rew_obj_move: float
 ):
+    rot_dist = rotation_distance(object_rot, target_rot)
+    rot_rew = 1.0 / (torch.abs(rot_dist) + rot_eps) * rot_reward_scale
+
+
 
     # 1. 生存報酬（落としていない場合の報酬）
-    reward_alive = torch.full_like(self.fell_off_buf, 
-                                    self.cfg.rew_scale_alive, 
-                                    device=self.device, 
+    reward_alive = torch.full_like(fell_off_buf, 
+                                    rew_scale_alive, 
                                     dtype=torch.float32)
     
     # 2. ドロップペナルティ
-    penalty_dropped = torch.full_like(self.fell_off_buf,
-                                        self.cfg.fall_penalty,
-                                        device=self.device,
+    penalty_dropped = torch.full_like(fell_off_buf,
+                                        fall_penalty,
                                         dtype=torch.float32)
     
     # 全ステップのobjectの変化（動いていればよし）
-    obj_move  = torch.sum(torch.abs(self.object_velocities - self.buffer[:, :]), dim=1)
-    obj_move_buf = obj_move > self.config.obj_move
+    obj_move  = torch.sum(torch.abs(object_velocities - buffer[:, -2, 120:126]), dim=1)
+    obj_move_buf = obj_move > thr_obj_move
     reward_move = torch.where(obj_move_buf,
                               torch.full_like(obj_move_buf,
-                                    self.cfg.rew_obj_move,
-                                    device=self.device,
-                                    dtype=torch.float32))
+                                    rew_obj_move,
+                                    dtype=torch.float32), 0.0)
 
 
-    reward = torch.where(self.fell_off_buf, 
+    reward = torch.where(fell_off_buf, 
                             penalty_dropped, 
                             reward_alive) + reward_move
 
+    # Find out which envs hit the goal and update successes count
+    goal_resets = torch.where(torch.abs(rot_dist) <= success_tolerance, torch.ones_like(reset_goal_buf), reset_goal_buf)
+    successes = successes + goal_resets
+
+    # Success bonus: orientation is within `success_tolerance` of goal orientation
+    # reward = torch.where(goal_resets == 1, reward + reach_goal_bonus, reward)
+
+    # Fall penalty: distance to the goal is larger than a threshold
+    # reward = torch.where(goal_dist >= fall_dist, reward + fall_penalty, reward)
+
     # Check env termination conditions, including maximum success number
-    resets = torch.where(self.fell_off_buf, torch.ones_like(reset_buf), reset_buf)
+    # resets = torch.where(goal_dist >= fall_dist, torch.ones_like(reset_buf), reset_buf)
+
+    # num_resets = torch.sum(resets)
+    # finished_cons_successes = torch.sum(successes * resets.float())
+    # Check env termination conditions, including maximum success number
+    resets = torch.where(fell_off_buf, torch.ones_like(reset_buf), reset_buf)
 
     num_resets = torch.sum(resets)
     finished_cons_successes = torch.sum(successes * resets.float())

@@ -103,11 +103,12 @@ class ShadowHandTactileFFPPORunnerCfg(RslRlOnPolicyRunnerCfg):
     max_iterations = 50000
     save_interval = 250
     experiment_name = "shadow_hand_tactile"
+    clip_actions = 1.0
     policy = RslRlPpoActorCriticCfg(
-        init_noise_std=1.0,
+        init_noise_std=0.5,
         actor_obs_normalization=True,
         critic_obs_normalization=True,
-        input_dims_list = [48, 65, 19, 25, 128],
+        input_dims_list = [48, 65, 19, 20, 17 ,128],
         actor_hidden_dims=[1024, 512, 512, 256, 128],
         critic_hidden_dims=[1024, 512, 512, 256, 128],
         activation="elu",

@@ -78,6 +78,7 @@ SHADOW_HAND_CFG = ArticulationCfg(
                 "robot0_(LF|TH)J4": 0.1,
                 "robot0_THJ0": 0.1,
             },
+            velocity_limit_sim=10,
         ),
     },
     soft_joint_pos_limit_factor=1.0,
