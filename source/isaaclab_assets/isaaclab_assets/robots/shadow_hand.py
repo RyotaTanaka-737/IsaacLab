@@ -32,7 +32,11 @@ SHADOW_HAND_CFG = ArticulationCfg(
         rigid_props=sim_utils.RigidBodyPropertiesCfg(
             disable_gravity=True,
             retain_accelerations=True,
-            max_depenetration_velocity=1000.0,
+            max_depenetration_velocity=5.0,
+            max_linear_velocity=5.0,
+            # 2. 回転速度の制限 [rad/s]
+            # 推奨: モーターの最大回転数に合わせる (例: 10.0 ~ 50.0)
+            max_angular_velocity=20.0,
         ),
         articulation_props=sim_utils.ArticulationRootPropertiesCfg(
             enabled_self_collisions=True,

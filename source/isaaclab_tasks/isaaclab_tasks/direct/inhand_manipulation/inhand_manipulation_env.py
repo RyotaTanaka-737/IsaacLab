@@ -66,7 +66,7 @@ class InHandManipulationEnv(DirectRLEnv):
         self.goal_pos = torch.zeros((self.num_envs, 3), dtype=torch.float, device=self.device)
         self.goal_pos[:, :] = torch.tensor([-0.2, -0.45, 0.68], device=self.device)
         # initialize goal marker
-        self.goal_markers = VisualizationMarkers(self.cfg.goal_object_cfg)
+        # self.goal_markers = VisualizationMarkers(self.cfg.goal_object_cfg)
 
         # track successes
         self.successes = torch.zeros(self.num_envs, dtype=torch.float, device=self.device)
@@ -110,7 +110,7 @@ class InHandManipulationEnv(DirectRLEnv):
             self.hand_dof_lower_limits[:, self.actuated_dof_indices],
             self.hand_dof_upper_limits[:, self.actuated_dof_indices],
         )
-        print('apply',self.cur_targets[:, self.actuated_dof_indices])
+        # print('apply',self.cur_targets[:, self.actuated_dof_indices])
 
         self.prev_targets[:, self.actuated_dof_indices] = self.cur_targets[:, self.actuated_dof_indices]
 

@@ -1069,25 +1069,41 @@ def get_prim_z_height(prim_path: str) -> float:
     size = range3d.GetSize()
 
     # size[2] が Z軸 (高さ)
-    return size[2]
+    # return size[2]
+
+    # World空間での底面高さ
+    world_bottom_z = range3d.GetMin()[2]
+
+    # 2. Prim自身のWorld座標(原点位置)を取得
+    xformable = UsdGeom.Xformable(prim)
+    # 現在の親を含むTransformを取得
+    world_transform = xformable.ComputeLocalToWorldTransform(Usd.TimeCode.Default())
+    # 行列から平行移動成分(Translation)のZを抽出
+    prim_origin_z = world_transform.ExtractTranslation()[2]
+
+    # 3. オフセットを計算 (底面 - 原点)
+    # 例: 原点が中心なら -0.5、原点が底面なら 0.0
+    offset_from_origin = world_bottom_z - prim_origin_z
+
+    return offset_from_origin
 
 def spawn_object_under_palm_down(
         env: ManagerBasedEnv, 
         env_ids: torch.Tensor, 
-        asset_cfg: SceneEntityCfg,
-        asset_stage_cfg: SceneEntityCfg
+        asset_cfg: SceneEntityCfg = SceneEntityCfg("object"),
+        robot_cfg: SceneEntityCfg = SceneEntityCfg("robot")
 ):
     # 1. アセットへのアクセス
     object_asset: RigidObject = env.scene[asset_cfg.name]
-    stage_object_asset: RigidObject = env.scene[asset_stage_cfg.name]
+    robot_asset: Articulation = env.scene[robot_cfg.name]
     
     # 2. 初期位置データのクローン
     default_root_state = object_asset.default_root_state[env_ids].clone()
-    default_root_state_stage = stage_object_asset.default_root_state[env_ids].clone()
+    default_root_state_robot = robot_asset.default_root_state[env_ids].clone()
     
     # 手のひらの高さ (例: 15cm)
-    palm_z = 0.5
-    safety_margin = 0.005 # 5mmの隙間
+    # palm_z = 1.9
+    safety_margin = 0.000005 # 5mmの隙間
     
     # --- 3. 環境ごとに高さを計算して位置を決定 ---
     # 注意: ループ処理はPythonサイドでは遅いですが、リセット時のみであれば許容範囲です。
@@ -1098,16 +1114,20 @@ def spawn_object_under_palm_down(
         # RigidObjectは通常 "/World/envs/env_{id}/Object" のようなパスを持ちます
         # ※ ここは実際のUSD構成に合わせてパスを構築してください
         prim_path = f"/World/envs/env_{int(env_id)}/object"
+        prim_path_robot = f"/World/envs/env_{int(env_id)}/Robot"
         
+        '''
         # 高さを取得 (動的計測)
         obj_height = get_prim_z_height(prim_path)
+        robot_height = get_prim_z_height(prim_path_robot)
         
         # 半分の高さ（中心から底面まで）
         half_height = obj_height / 2.0
+        half_height_robot = obj_height_robot / 2.0
         
         # 目標位置: 手の高さ - マージン - オブジェクトの半径
-        target_z = palm_z - safety_margin - half_height
-        target_z_stage = target_z - safety_margin - 0.05
+        target_z = safety_margin + half_height
+        target_z_robot = obj_height + safety_margin + safety_margin
         
         # 床へのめり込み防止
         # if target_z < half_height:
@@ -1115,13 +1135,48 @@ def spawn_object_under_palm_down(
             
         # 計算したZを適用
         default_root_state[i, 2] = target_z
-        default_root_state_stage[i, 2] = target_z_stage
+        default_root_state_robot[i, 2] = target_z_robot
+        '''
+        # --- A. オブジェクトの底面オフセットを取得 ---
+        # 「原点から底面までどれくらい下がっているか」
+        # 例: 中心原点なら -0.05, 底面原点なら 0.0
+        obj_bottom_offset = get_prim_z_height(prim_path_obj)
+
+        # --- B. ロボットの高さ計算（必要に応じて） ---
+        # ロボットをオブジェクトの上に置くなら、オブジェクトの「天井」が必要です
+        # 天井 = 底面オフセット + 高さ (あるいは Max - Origin)
+        # ここでは簡易的に BBoxCache から再取得するか、サイズを加算します
+        # (簡略化のため、前の get_prim_z_height も使うか、bboxロジックを統合すると良いです)
+        stage = omni.usd.get_context().get_stage()
+        bound_obj = UsdGeom.BBoxCache(Usd.TimeCode.Default(), [UsdGeom.Tokens.default_]).ComputeWorldBound(stage.GetPrimAtPath(prim_path_obj))
+        obj_height_val = bound_obj.GetRange().GetSize()[2]
+
+        # --- C. 目標位置の計算 ---
+
+        # オブジェクトの目標Z (床に置く)
+        # 目標 = 床(0.0) + マージン - (原点から底面までの距離)
+        # 例: 原点中心(-0.5)の場合 -> 0.0 - (-0.5) = +0.5 (持ち上げる)
+        # 例: 原点底面( 0.0)の場合 -> 0.0 - ( 0.0) =  0.0 (そのまま)
+        target_z_obj = safety_margin - obj_bottom_offset
+
+        # ロボットの目標Z (オブジェクトの上に置く)
+        # 床からのオブジェクトの天面高さ + マージン - (ロボットの原点から底面までの距離)
+        robot_bottom_offset = get_prim_z_height(prim_path_robot)
+
+        # 床からオブジェクト天面までの高さ = target_z_obj + 原点高さ + (天面 - 原点) ...
+        # もっと単純に: 床 + オブジェクト全高 + マージン - ロボット底面オフセット
+        # ※オブジェクトが沈んでいない前提
+        target_z_robot = obj_height_val + safety_margin*2 - robot_bottom_offset
+
+        # 計算したZを適用
+        default_root_state[i, 2] = target_z_obj
+        default_root_state_robot[i, 2] = target_z_robot
 
     # 4. シミュレーションに書き込み
     object_asset.write_root_pose_to_sim(default_root_state[:, :7], env_ids=env_ids)
     object_asset.write_root_velocity_to_sim(default_root_state[:, 7:], env_ids=env_ids)
-    stage_object_asset.write_root_pose_to_sim(default_root_state_stage[:, :7], env_ids=env_ids)
-    stage_object_asset.write_root_velocity_to_sim(default_root_state_stage[:, 7:], env_ids=env_ids)
+    robot_asset.write_root_pose_to_sim(default_root_state_robot[:, :7], env_ids=env_ids)
+    robot_asset.write_root_velocity_to_sim(default_root_state_robot[:, 7:], env_ids=env_ids)
 
 
 def reset_root_state_uniform(

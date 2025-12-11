@@ -187,25 +187,26 @@ class FeatureExtractor:
         for param in self.feature_extractor.parameters():
             param.requires_grad = True
             # print(param)
-        self.optimizer = torch.optim.Adam(self.feature_extractor.parameters(), lr=1e-4)
-        current_obs = input_obs.clone().float().to("cuda:0")
+        current_obs = input_obs.clone().float().to("cuda:0").requires_grad_(True)
         if current_obs.numel() == 0:
             print('NUUUUUUUUUUUUUUUUUUUL')
         if self.cfg.train:
-            with torch.enable_grad():
+            # with torch.enable_grad():
+            with torch.set_grad_enabled(True):
                 # with torch.inference_mode(False):
                 self.optimizer.zero_grad()
 
                 predicted_feature = self.feature_extractor(current_obs)
                 # print('grad_fn', predicted_feature.grad_fn)
                 feature_loss = self.l2_loss(predicted_feature, gt_feature.clone().float()) * 100
-                if feature_loss.requires_grad and feature_loss.grad_fn is not None:
+                # if feature_loss.requires_grad and feature_loss.grad_fn is not None:
+                if True:
                     feature_loss.backward()
                     self.optimizer.step()
                 else:
                     print("Warning: Skipping backward pass (No grad_fn found this step).")
 
-                if self.step_count % 50000 == 0:
+                if self.step_count % 250 == 0:
                     torch.save(
                         self.feature_extractor.state_dict(),
                         os.path.join(self.log_dir, f"cnn_{self.step_count}_{feature_loss.detach().cpu().numpy()}.pth"),

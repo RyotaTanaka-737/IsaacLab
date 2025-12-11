@@ -34,23 +34,19 @@ from isaaclab.markers.config import FRAME_MARKER_CFG
 from isaaclab.utils.math import quat_conjugate, quat_from_angle_axis, quat_mul, sample_uniform, saturate
 from isaaclab.sensors import ContactSensorCfg, ContactSensor
 import numpy as np
-from collections import deque
-from pxr import Usd, UsdGeom
-import omni.usd
-# from omni.isaac.lab.utils.math import sample_uniform, randomize_rotation
 
 usd_list = sorted(glob.glob('/home/ubuntu/IsaacLab/asset/mix/train/*.usd', recursive=True))
 
 
 
-"""
+
 @configclass
 class ShadowHandTactileEnvPlayCfg(ShadowHandTactileEnvCfg):
     # scene
     scene: InteractiveSceneCfg = InteractiveSceneCfg(num_envs=64, env_spacing=2.0, replicate_physics=False)
     # inference for CNN
-    feature_extractor = FeatureExtractorCfg(train=False, load_checkpoint=True)
-"""
+    # feature_extractor = FeatureExtractorCfg(train=False, load_checkpoint=True)
+
 
 class ShadowHandTactileEnv(InHandManipulationEnv):
     cfg: ShadowHandTactileEnvCfg
@@ -82,41 +78,24 @@ class ShadowHandTactileEnv(InHandManipulationEnv):
 
         self.npy_list = []
         for _i_ in range(self.num_envs):
-            npy_path = (usd_list[(_i_% len(usd_list))].replace('asset/mix/train/', 'features/mix/train/')).replace('.usd', '.npy')
+            npy_path = (usd_list[(_i_% len(usd_list))].replace('asset', 'features')).replace('.usd', '.npy')
             self.npy_list.append(np.load(npy_path))
-
-        # --- カリキュラム状態管理 ---
-        self.curriculum_level = self.cfg.curr_initial_level
-        # 成功判定の履歴バッファ (直近100エピソード)
-        self.success_buf = deque(maxlen=100)
-
-        # --- 時間・イベント管理用バッファ ---
-        # 各環境が最後にリセットされた絶対時刻
-        self._env_reset_times = torch.zeros(self.num_envs, device=self.device)
-        # 各環境ごとの「リセットから外乱開始までの遅延時間」
-        self._force_trigger_delays = torch.zeros(self.num_envs, device=self.device)
-        self.active_mask = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
-        # 実際の初期位置を保存するバッファを作成
-        self._object_start_pos = torch.zeros(self.num_envs, device=self.device)
-
-        self.success_rate = 0
 
 
     def _setup_scene(self):
         # add hand, in-hand object, and goal object
         self.hand = Articulation(self.cfg.robot_cfg)
         self.object = RigidObject(self.cfg.object_cfg)
-        # self.object_stage = RigidObject(self.cfg.object_stage_cfg)
+        self.object_stage = RigidObject(self.cfg.object_stage_cfg)
         # self._tiled_camera = TiledCamera(self.cfg.tiled_camera)
         # get stage
-        # self.scene.register("object_stage", self.object_stage)
         spawn_ground_plane(prim_path="/World/ground", cfg=GroundPlaneCfg())
         # clone and replicate (no need to filter for this environment)
         self.scene.clone_environments(copy_from_source=False)
         # add articulation to scene - we must register to scene to randomize with EventManager
         self.scene.articulations["robot"] = self.hand
         self.scene.rigid_objects["object"] = self.object
-        # self.scene.rigid_objects["object_stage"] = self.object_stage
+        self.scene.rigid_objects["object_stage"] = self.object_stage
         # self.scene.sensors["tiled_camera"] = self._tiled_camera
         self.distal_sensor = ContactSensor(self.cfg.distal_contact_cfg)
         self.proximal_sensor = ContactSensor(self.cfg.proximal_contact_cfg)
@@ -194,6 +173,7 @@ class ShadowHandTactileEnv(InHandManipulationEnv):
         # obs_prev = self.buffer.__getitem__(0)
         obs_concat = torch.cat((concat_list), dim=-1)
         """
+
         feature_loss = self.feature_extractor.step(
             obs_gt,
             input_obs,
@@ -203,12 +183,7 @@ class ShadowHandTactileEnv(InHandManipulationEnv):
         # log pose loss from CNN training
         if "log" not in self.extras:
             self.extras["log"] = dict()
-        if self.cfg.feature_train == True:
-            self.extras["log"]["feature_loss"] = feature_loss[0].mean()
-
-        if "log" not in self.extras:
-            self.extras["log"] = dict()
-        self.extras["log"]["curriculum"] = self.curriculum_level
+        self.extras["log"]["feature_loss"] = feature_loss[0].mean()
 
         return obs_gt
 
@@ -227,16 +202,16 @@ class ShadowHandTactileEnv(InHandManipulationEnv):
         obs = torch.cat(
             (
                 # hand
-                unscale(self.hand_dof_pos, self.hand_dof_lower_limits, self.hand_dof_upper_limits), # 24
-                # self.hand_dof_pos,
-                torch.clamp(self.cfg.vel_obs_scale * self.hand_dof_vel, -100.0, 100.0), # 24
+                # unscale(self.hand_dof_pos, self.hand_dof_lower_limits, self.hand_dof_upper_limits), # 24
+                self.hand_dof_pos,
+                self.cfg.vel_obs_scale * self.hand_dof_vel, # 24
                 # goal
                 # self.in_hand_pos, # 3
                 # self.goal_rot, # 4
                 # fingertips
                 self.fingertip_pos.view(self.num_envs, self.num_fingertips * 3), # 15
                 self.fingertip_rot.view(self.num_envs, self.num_fingertips * 4), # 20
-                torch.clamp(self.fingertip_velocities.view(self.num_envs, self.num_fingertips * 6), -100.0, 100.0), # 30
+                self.fingertip_velocities.view(self.num_envs, self.num_fingertips * 6), # 30
                 # object
                 self.object_pos, # 3
                 self.object_rot, # 4
@@ -261,7 +236,6 @@ class ShadowHandTactileEnv(InHandManipulationEnv):
         state_obs = self._compute_proprio_observations()
         # get_tactile
         tactile_obs = self._get_tactile()
-        # print(tactile_obs)
         obs_now = torch.cat((state_obs, tactile_obs), dim=-1)
         self.buffer.append(obs_now)
 
@@ -371,29 +345,17 @@ class ShadowHandTactileEnv(InHandManipulationEnv):
             self.object_velocities,
             self.buffer.buffer[:, :, :],
             self.cfg.thr_obj_move,
-            self.cfg.rew_obj_move,
-            self.curriculum_level,
-            self._object_start_pos,
-            self.cfg.rew_height,
-            self.hand.data.applied_torque,
-            self.hand.data.joint_vel,
-            self.cfg.penalty_torque_scale,
-            self.cfg.penalty_dof_vel_scale,
-            self.cfg.total_scale,
+            self.cfg.rew_obj_move
         )
 
         if "log" not in self.extras:
             self.extras["log"] = dict()
         self.extras["log"]["consecutive_successes"] = self.consecutive_successes.mean()
 
-        if "log" not in self.extras:
-            self.extras["log"] = dict()
-        self.extras["log"]["successes_rate"] = self.success_rate
-
         # reset goals if the goal has been reached
-        goal_env_ids = self.reset_goal_buf.nonzero(as_tuple=False).squeeze(-1)
-        if len(goal_env_ids) > 0:
-            self._reset_target_pose(goal_env_ids)
+        # goal_env_ids = self.reset_goal_buf.nonzero(as_tuple=False).squeeze(-1)
+        # if len(goal_env_ids) > 0:
+        #     self._reset_target_pose(goal_env_ids)
 
         return total_reward
 
@@ -401,28 +363,9 @@ class ShadowHandTactileEnv(InHandManipulationEnv):
         self._compute_intermediate_values()
 
         # reset when cube has fallen
-        goal_dist = torch.norm(self.object_pos - self.in_hand_pos, p=2, dim=-1)
-        out_of_reach = goal_dist >= self.cfg.fall_dist
-
-        # reset when cube has fallen
-        if self.curriculum_level > 0.0:
-            self.fell_off_buf = (self.object_pos[:, 2] < self.cfg.fall_height * self.curriculum_level) & (self.active_mask)
-        else:
-            self.fell_off_buf = self.active_mask
-
-        if self.cfg.max_consecutive_success > 0:
-            # Reset progress (episode length buf) on goal envs if max_consecutive_success > 0
-            rot_dist = rotation_distance(self.object_rot, self.goal_rot)
-            self.episode_length_buf = torch.where(
-                torch.abs(rot_dist) <= self.cfg.success_tolerance,
-                torch.zeros_like(self.episode_length_buf),
-                self.episode_length_buf,
-            )
-            max_success_reached = self.successes >= self.cfg.max_consecutive_success
+        self.fell_off_buf = self.object_pos[:, 2] < self.cfg.fall_height
 
         time_out = self.episode_length_buf >= self.max_episode_length - 1
-        if self.cfg.max_consecutive_success > 0:
-            time_out = time_out | max_success_reached
 
         return self.fell_off_buf, time_out
 
@@ -434,21 +377,10 @@ class ShadowHandTactileEnv(InHandManipulationEnv):
         super()._reset_idx(env_ids)
 
         # reset goals
-        self._reset_target_pose(env_ids)
+        # self._reset_target_pose(env_ids)
 
         # reset object
-        # -----------------------------------------------------
-        # 2. データの準備
-        # -----------------------------------------------------
-        # デフォルト状態をコピー
         object_default_state = self.object.data.default_root_state.clone()[env_ids]
-        robot_default_state = self.hand.data.default_root_state.clone()[env_ids]
-        robot_default_state[:, 0:3] = robot_default_state[: ,0:3] + self.scene.env_origins[env_ids]
-        # パラメータ設定
-        floor_z = 0.0
-        margin_floor = 0.001  # 床との隙間 (埋まり防止)
-        margin_robot = 0.1   # オブジェクトとロボットの隙間 (5cm)
-        
         pos_noise = sample_uniform(-1.0, 1.0, (len(env_ids), 3), device=self.device)
         # global object positions
         object_default_state[:, 0:3] = (
@@ -461,12 +393,8 @@ class ShadowHandTactileEnv(InHandManipulationEnv):
         )
 
         object_default_state[:, 7:] = torch.zeros_like(self.object.data.default_root_state[env_ids, 7:])
-        # object_stage_default_state[:, 7:] = torch.zeros_like(self.object_stage.data.default_root_state[env_ids, 7:])
-        # self.object.write_root_pose_to_sim(object_default_state[:, :7], env_ids)
-        # self.object_stage.write_root_pose_to_sim(object_stage_default_state[:, :7], env_ids)
-        # self.object.write_root_velocity_to_sim(object_default_state[:, 7:], env_ids)
-        # self.object_stage.write_root_velocity_to_sim(object_stage_default_state[:, 7:], env_ids)
-        # self._object_start_pos[env_ids] = object_default_state[:, 2]
+        self.object.write_root_pose_to_sim(object_default_state[:, :7], env_ids)
+        self.object.write_root_velocity_to_sim(object_default_state[:, 7:], env_ids)
 
         # reset hand
         delta_max = self.hand_dof_upper_limits[env_ids] - self.hand.data.default_joint_pos[env_ids]
@@ -485,113 +413,11 @@ class ShadowHandTactileEnv(InHandManipulationEnv):
 
         self.hand.set_joint_position_target(dof_pos, env_ids=env_ids)
         self.hand.write_joint_state_to_sim(dof_pos, dof_vel, env_ids=env_ids)
-    
-        
-        # -----------------------------------------------------
-        # 4. Z座標(高さ)の計算
-        # -----------------------------------------------------
-        for i, env_id in enumerate(env_ids):
-            # Primパスを取得
-            prim_path = f"/World/envs/env_{int(env_id)}/object"
-            
-            # 形状情報を取得
-            bottom_offset, obj_height = get_prim_geometry_info(prim_path)
-            
-            # --- A. オブジェクトのZ ---
-            # 式: 床高さ + マージン - (原点から底面のズレ)
-            # offsetがマイナスの場合、マイナスを引くのでプラスになり持ち上がります
-            obj_target_z = floor_z + margin_floor - bottom_offset
-            
-            # --- B. ロボットのZ ---
-            # 式: オブジェクトのZ(原点) + 底面への距離(戻す) + 全高 + マージン
-            # これで「オブジェクトの天面 + マージン」の位置になります
-            robot_target_z = obj_target_z + bottom_offset + obj_height + margin_robot
-            
-            # 適用
-            object_default_state[i, 2] = obj_target_z
-            robot_default_state[i, 2] = robot_target_z
-            
-        self.object.write_root_pose_to_sim(object_default_state[:, :7], env_ids)
-        self.object.write_root_velocity_to_sim(object_default_state[:, 7:], env_ids)
-        self._object_start_pos[env_ids] = object_default_state[:, 2]
-        
-        self.hand.write_root_pose_to_sim(robot_default_state[:, :7], env_ids)
-        self.hand.write_root_velocity_to_sim(robot_default_state[:, 7:], env_ids)
-
-        if len(env_ids) > 0:
-            success_results = (self.successes[env_ids] > 0).float().cpu().tolist()
-            self.success_buf.extend(success_results)
-        # 2. 成功率計算とレベル調整
-        if len(self.success_buf) > 0:
-            success_rate = sum(self.success_buf) / len(self.success_buf)
-
-            # レベルアップ
-            if success_rate > self.cfg.curr_threshold_up:
-                self.curriculum_level += self.cfg.curr_step_size
-            # レベルダウン (難しすぎる場合)
-            elif success_rate < self.cfg.curr_threshold_down:
-                self.curriculum_level -= self.cfg.curr_step_size
-
-            # クリップ (0.0 ~ 1.0)
-            self.curriculum_level = max(0.0, min(1.0, self.curriculum_level))
 
         self.successes[env_ids] = 0
         self._compute_intermediate_values()
 
         self.buffer.reset(env_ids)
-
-        # 1. 現在の絶対時刻 (シミュレーション時間) を取得
-        current_time = self.common_step_counter * self.step_dt
-
-        # 2. リセット時刻を更新
-        self._env_reset_times[env_ids] = current_time
-
-        # 3. 次の外乱イベントまでの遅延時間をランダムに決定
-        # min_s 〜 max_s の一様乱数
-        delays = (torch.rand(len(env_ids), device=self.device) * (self.cfg.force_delay_max_s - self.cfg.force_delay_min_s) +
-                  self.cfg.force_delay_min_s)
-        self._force_trigger_delays[env_ids] = delays
-
-        self.active_mask[env_ids] = False
-        self.success_rate = success_rate
-
-
-    def _pre_physics_step(self, actions: torch.Tensor) -> None:
-        # 1. 外乱の適用 (カリキュラムレベル > 0 の場合のみ計算)
-        if self.curriculum_level > 0.0:
-            self._apply_curriculum_forces()
-
-        self.actions = actions.clone()
-
-
-    def _apply_curriculum_forces(self):
-        # 現在時刻
-        current_time = self.common_step_counter * self.step_dt
-
-        # リセットからの経過時間
-        time_since_reset = current_time - self._env_reset_times
-
-        # 外乱を開始する時刻 = 0 + delay
-        start_times = self._force_trigger_delays
-        # 外乱を終了する時刻 = start + duration
-        end_times = start_times + self.cfg.force_duration_s
-
-        # 現在時刻が [start, end] の区間に入っている環境を特定
-        self.active_mask = (time_since_reset >= start_times) & (time_since_reset <= end_times)
-        env_ids_active = self.active_mask.nonzero(as_tuple=False).flatten()
-
-        # 対象環境があれば力を加える
-        if len(env_ids_active) > 0:
-            # 現在のレベルに応じた力の強さ (Linear Scaling)
-            current_mag = self.curriculum_level * self.cfg.force_max_magnitude
-
-            # 上方向 (+Z) の力を作成
-            forces = torch.zeros((len(env_ids_active), 3), device=self.device)
-            forces[:, 2] = current_mag
-
-            # ロボットのRootリンクに適用
-            # ※固定アームの場合は手先リンクのindexを指定する必要があります
-            self._robot.root_physx_view.apply_forces(forces, indices=env_ids_active)
 
     def _reset_target_pose(self, env_ids):
         # reset goal rotation
@@ -603,7 +429,7 @@ class ShadowHandTactileEnv(InHandManipulationEnv):
         # update goal pose and markers
         self.goal_rot[env_ids] = new_rot
         goal_pos = self.goal_pos + self.scene.env_origins
-        # self.goal_markers.visualize(self.goal_rot[:,:3])
+        self.goal_markers.visualize(self.goal_rot[:,:3])
 
         self.reset_goal_buf[env_ids] = 0
 
@@ -675,30 +501,11 @@ def compute_rewards(
     object_velocities: torch.Tensor,
     buffer: torch.Tensor,
     thr_obj_move: float,
-    rew_obj_move: float,
-    curriculum_level: float,
-    object_start_pos: torch.Tensor,
-    rew_height: float,
-    applied_torque: torch.Tensor,
-    joint_vel: torch.Tensor,
-    penalty_torque_scale: float,
-    penalty_dof_vel_scale: float,
-    total_scale: float,
+    rew_obj_move: float
 ):
-    sigma = 0.25
     rot_dist = rotation_distance(object_rot, target_rot)
-    # rot_rew = (1.0 / (torch.abs(rot_dist) + rot_eps))* rot_reward_scale
-    rot_rew = torch.exp(-torch.square(rot_dist) / sigma)
+    rot_rew = 1.0 / (torch.abs(rot_dist) + rot_eps) * rot_reward_scale
 
-    # Find out which envs hit the goal and update successes count
-    goal_resets = torch.where(torch.abs(rot_dist) <= success_tolerance, torch.ones_like(reset_goal_buf), reset_goal_buf)
-    successes = successes + goal_resets
-
-    # Success bonus: orientation is within `success_tolerance` of goal orientation
-    reward_goal = torch.where(goal_resets == 1, reach_goal_bonus, 0.0)
-
-    # Check env termination conditions, including maximum success number
-    # resets = torch.where(goal_dist >= fall_dist, torch.ones_like(reset_buf), reset_buf)
 
 
     # 1. 生存報酬（落としていない場合の報酬）
@@ -711,7 +518,7 @@ def compute_rewards(
                                         fall_penalty,
                                         dtype=torch.float32)
     
-    # prevステップのobjectの変化（動いていればよし）
+    # 全ステップのobjectの変化（動いていればよし）
     obj_move  = torch.sum(torch.abs(object_velocities - buffer[:, -2, 120:126]), dim=1)
     obj_move_buf = obj_move > thr_obj_move
     reward_move = torch.where(obj_move_buf,
@@ -719,21 +526,10 @@ def compute_rewards(
                                     rew_obj_move,
                                     dtype=torch.float32), 0.0)
 
-    dist_from_start_z = (object_start_pos - object_pos[:, 2])
-    height_buf = dist_from_start_z > 0.05
-    reward_height = torch.where(height_buf,
-                              torch.full_like(height_buf,
-                                    rew_height,
-                                    dtype=torch.float32), -1.0*curriculum_level)
-    
-    action_penalty = torch.sum(actions**2, dim=-1) * action_penalty_scale
-    penalty_torque = torch.sum(torch.square(applied_torque), dim=1) * penalty_torque_scale
-    penalty_dof_vel = torch.sum(torch.square(joint_vel), dim=1) * penalty_dof_vel_scale
 
     reward = torch.where(fell_off_buf, 
                             penalty_dropped, 
-                            reward_alive) + reward_move + reward_goal + rot_rew + reward_height + action_penalty + penalty_torque + penalty_dof_vel
-    reward = reward * total_scale
+                            reward_alive) + reward_move
 
     # Find out which envs hit the goal and update successes count
     goal_resets = torch.where(torch.abs(rot_dist) <= success_tolerance, torch.ones_like(reset_goal_buf), reset_goal_buf)
@@ -763,39 +559,3 @@ def compute_rewards(
     )
 
     return reward, goal_resets, successes, cons_successes
-    
-def get_prim_geometry_info(prim_path: str):
-    """
-    指定されたPrimの幾何情報を取得します。
-    
-    Returns:
-        bottom_offset (float): 原点(0,0,0)から底面(Min Z)までの距離。通常は負の値か0.0。
-        height (float): オブジェクトのZ軸方向の全長。
-    """
-    stage = omni.usd.get_context().get_stage()
-    prim = stage.GetPrimAtPath(prim_path)
-    if not prim.IsValid():
-        # エラー時のデフォルト値 (適宜調整)
-        return 0.0, 0.1
-
-    # Collision (proxy) も含めたバウンディングボックスを計算
-    bbox_cache = UsdGeom.BBoxCache(Usd.TimeCode.Default(), [UsdGeom.Tokens.default_, UsdGeom.Tokens.proxy])
-    bound = bbox_cache.ComputeWorldBound(prim)
-    range3d = bound.GetRange()
-    
-    # 1. 高さ (Size Z)
-    height = range3d.GetSize()[2]
-    
-    # 2. 底面のWorld Z座標
-    world_bottom_z = range3d.GetMin()[2]
-
-    # 3. 原点(Pivot)のWorld Z座標
-    xformable = UsdGeom.Xformable(prim)
-    world_transform = xformable.ComputeLocalToWorldTransform(Usd.TimeCode.Default())
-    world_pivot_z = world_transform.ExtractTranslation()[2]
-    
-    # 4. オフセット (底面 - 原点)
-    # 例: 中心原点なら -0.05, 底面原点なら 0.0
-    bottom_offset = world_bottom_z - world_pivot_z
-    
-    return bottom_offset, height
