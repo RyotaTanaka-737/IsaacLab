@@ -37,6 +37,7 @@ SHADOW_HAND_CFG = ArticulationCfg(
             # 2. 回転速度の制限 [rad/s]
             # 推奨: モーターの最大回転数に合わせる (例: 10.0 ~ 50.0)
             max_angular_velocity=20.0,
+            linear_damping=1.0
         ),
         articulation_props=sim_utils.ArticulationRootPropertiesCfg(
             enabled_self_collisions=True,
@@ -44,6 +45,7 @@ SHADOW_HAND_CFG = ArticulationCfg(
             solver_velocity_iteration_count=0,
             sleep_threshold=0.005,
             stabilization_threshold=0.0005,
+            # fix_root_link=False,
         ),
         # collision_props=sim_utils.CollisionPropertiesCfg(contact_offset=0.005, rest_offset=0.0),
         joint_drive_props=sim_utils.JointDrivePropertiesCfg(drive_type="force"),

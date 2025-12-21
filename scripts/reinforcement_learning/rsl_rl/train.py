@@ -9,6 +9,7 @@
 
 import argparse
 import sys
+import shutil
 
 from isaaclab.app import AppLauncher
 
@@ -219,6 +220,20 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     # dump the configuration into log-directory
     dump_yaml(os.path.join(log_dir, "params", "env.yaml"), env_cfg)
     dump_yaml(os.path.join(log_dir, "params", "agent.yaml"), agent_cfg)
+
+    backup_dir = os.path.join(log_dir, "source_backup")
+    source_root = "./"
+
+    # 3. コピーしたくないフォルダ (巨大なログやGit管理ファイルなど)
+    ignore_patterns = shutil.ignore_patterns(
+        "logs", "__pycache__", ".git", "*.egg-info", "docs", "asset", "features", "point_cloud"
+    )
+
+
+    # 4. コピー実行
+    if os.path.exists(backup_dir):
+        shutil.rmtree(backup_dir) # 既に同名があれば消す
+    shutil.copytree(source_root, backup_dir, ignore=ignore_patterns)
 
     # run training
     runner.learn(num_learning_iterations=agent_cfg.max_iterations, init_at_random_ep_len=True)
